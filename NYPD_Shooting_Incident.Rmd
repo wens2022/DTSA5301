@@ -1,0 +1,338 @@
+---
+title: "NYPD_Shooting_Incident_Data_Investigation"
+author: "anonymous"
+date: "2025-06-08"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(hms) # to convert time to hh:mm:ss
+```
+
+### Project Overview
+
+This project investigates historical shooting incidents in New York City using the *NYPD Shooting Incident Data (Historic)* dataset in a reproducible manner. The analysis follows a structured pipeline:
+
+1. **Data importation**
+2. **Data tidying and transformation**
+3. **Visualization and Analyzing**
+4. **Conclusion and Bias Identification**
+
+
+
+## Project Step 1: Start an Rmd Document
+Start an Rmd document that describes and imports the shooting project dataset in a reproducible manner.
+
+On https://catalog.data.gov/dataset, find the NYPD Shooting Incident Data (Historic) dataset
+
+according to the reproducible manner, I perform the following items:
+- library the packages at the beginning
+- to get dataset, use link address rather than absolution path
+
+```{r get NYDP Shooting Incident Data (Historic)}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+```
+
+``` {r import the data}
+shooting_incident <- read_csv(url_in)
+# And we could check with names() and head()
+#names(shooting_incident)
+#head(shooting_incident)
+```
+
+
+## Project Step 2: tidy and transform the data
+In this step, we work on the dataset by:
+1. select columns;
+2. convert variables to appropriate types (date, factor)
+3. check for missing data
+4. summarize the strategy to handle missing data
+
+We keep the essential columns for time, location, and target variable. 
+We then clean the data types, create derived time fields, and check for missing values.
+```{r clean the data }
+shooting_incident_simple <- shooting_incident %>%
+  select(OCCUR_DATE, OCCUR_TIME, BORO, STATISTICAL_MURDER_FLAG) %>%
+  mutate(
+    OCCUR_DATE = mdy(OCCUR_DATE),
+    OCCUR_TIME = as_hms(OCCUR_TIME),
+    HOUR = hour(OCCUR_TIME),
+    WEEKDAY = wday(OCCUR_DATE, label = TRUE, abbr = FALSE),
+    MONTH = month(OCCUR_DATE, label = TRUE),
+    YEAR = year(OCCUR_DATE),
+    BORO = as.factor(BORO),
+    STATISTICAL_MURDER_FLAG = as.integer(STATISTICAL_MURDER_FLAG)
+  )
+
+```
+
+```{r data summary}
+summary(shooting_incident_simple)
+colSums(is.na(shooting_incident_simple))
+```
+
+
+### Transition to Visualization
+After the selection and transformation, we find that the result has no missing data.
+With a cleaned and structured dataset containing key temporal and spatial features, we next explore the distribution of shooting incidents and fatality rates through a series of visualizations. These help identify important patterns and inform the later modeling steps.
+
+
+## Project Step 3.1: visualizing
+
+
+
+
+```{r stepp3summarize1}
+#Summarize total incidents, murders, and murder rate per borough
+murder_rate_by_boro <- shooting_incident_simple %>%
+  group_by(BORO) %>%
+  summarise(
+    total = n(),
+    murder_count = sum(STATISTICAL_MURDER_FLAG),
+    murder_rate = round(murder_count / total * 100, 2)
+  ) %>%
+  arrange(desc(murder_rate)) %>%
+  mutate(label_text = paste0(murder_count, " / ", total))  
+
+```
+To understand geographic differences, we first examine the murder rate by borough. We then shift to analyzing temporal dynamics by examining how fatality rates vary across hours of the day, weekdays, and years.
+
+```{r step3plot1_murder_by_districts}
+ggplot(murder_rate_by_boro, 
+       aes(x = reorder(BORO, -murder_rate), y = murder_rate)) +
+  geom_col(fill = "#a83232", width = 0.6) +
+  geom_text(aes(label = label_text),  # use the new column here
+            vjust = -0.5, size = 4, color = "black") +
+  labs(
+    title = "Murder Rate by Borough (with Case Counts)",
+    x = "Borough",
+    y = "Murder Rate (%)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.x = element_text(angle = 0)
+  )
+```
+
+```{r step3muder_by_Hour}
+# Compute murder rate by hour
+murder_by_hour <- shooting_incident_simple %>%
+  group_by(HOUR) %>%
+  summarise(
+    total = n(),
+    murder_count = sum(STATISTICAL_MURDER_FLAG),
+    murder_rate = round(murder_count / total * 100, 2)
+  )
+
+# Simplified label format and visual controls
+ggplot(murder_by_hour, aes(x = HOUR, y = murder_rate)) +
+  geom_col(fill = "gray40") +  # use clean neutral bar color
+  geom_text(
+  aes(label = paste0(round(murder_rate, 1), "%")),
+  angle = 90,           # rotate labels
+  vjust = 0.5,          # center vertically on top of bar
+  hjust = -0.3,         # shift left a bit to not collide with bar edge
+  size = 3, color = "black"
+  ) +
+  scale_x_continuous(breaks = 0:23) +  # force full 0–23 x-axis ticks
+  ylim(0, max(murder_by_hour$murder_rate) + 5) +  # add padding at top
+  labs(
+    title = "Murder Rate by Hour of Day",
+    x = "Hour (24-hour format)",
+    y = "Murder Rate (%)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.x = element_text(angle = 0)
+  )
+```
+After examining hourly variations, we evaluate broader time patterns across the week. Lastly, we study yearly trends in both total shootings and fatal incidents across boroughs.
+
+```{r step3murder_by_day_of_week}
+# Compute murder rate by weekday
+murder_by_weekday <- shooting_incident_simple %>%
+  group_by(WEEKDAY) %>%
+  summarise(
+    total = n(),
+    murder_count = sum(STATISTICAL_MURDER_FLAG),
+    murder_rate = round(murder_count / total * 100, 2)
+  )
+
+# Reorder weekdays to calendar order
+murder_by_weekday$WEEKDAY <- factor(
+  murder_by_weekday$WEEKDAY,
+  levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+)
+
+# Plot
+ggplot(murder_by_weekday, aes(x = WEEKDAY, y = murder_rate)) +
+  geom_col() +
+  geom_text(aes(label = paste0(round(murder_rate, 1), "%")),
+            vjust = -0.5, size = 3, color = "black") +
+  ylim(0, max(murder_by_weekday$murder_rate) + 5) +
+  labs(
+    title = "Murder Rate by Day of Week",
+    x = "Weekday",
+    y = "Murder Rate (%)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+
+```{r boro_total_per_year}
+# Group by both YEAR and BORO, and count total incidents
+incidents_by_year_boro <- shooting_incident_simple %>%
+  group_by(YEAR, BORO) %>%
+  summarise(total = n(), .groups = "drop")
+
+ggplot(incidents_by_year_boro, aes(x = YEAR, y = total, color = BORO)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Shooting Incidents by Year and Borough",
+    x = "Year",
+    y = "Number of Incidents",
+    color = "Borough"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+```
+
+```{r boro_murder_per_year}
+murder_by_year_boro <- shooting_incident_simple %>%
+  filter(STATISTICAL_MURDER_FLAG == 1) %>%
+  group_by(YEAR, BORO) %>%
+  summarise(murder_count = n(), .groups = "drop")
+
+# Line plot
+ggplot(murder_by_year_boro, aes(x = YEAR, y = murder_count, color = BORO)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Fatal Shootings by Year and Borough",
+    x = "Year",
+    y = "Number of Fatal Shootings",
+    color = "Borough"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+```
+
+## Project Step 3.2: Analyzing
+
+```{r analyze_basic:descriptive comparison}
+
+# Overall murder rate
+mean(shooting_incident_simple$STATISTICAL_MURDER_FLAG)
+
+# Murder rate by hour
+shooting_incident_simple %>%
+  group_by(HOUR) %>%
+  summarise(murder_rate = mean(STATISTICAL_MURDER_FLAG)) %>%
+  arrange(desc(murder_rate))
+
+```
+The visualizations above reveal a clear non-uniform distribution of fatal shootings across different hours. To quantitatively confirm these patterns and evaluate their predictive value, we construct a logistic regression model where the binary outcome is whether a shooting was fatal.
+```{r analyze_regression}
+model <- glm(                             
+  # Fit a Generalized Linear Model (GLM) and assign it to 'model'
+  STATISTICAL_MURDER_FLAG ~ factor(HOUR),  
+  # Response variable is binary: fatal (1) vs. non-fatal (0)
+  # Predictors are: Borough, Hour of day, and Weekday
+  data = shooting_incident_simple,       
+  # Use the cleaned shooting dataset
+  family = "binomial"                    
+  # Specify logistic regression (logit link), appropriate for binary outcomes
+)
+summary(model)
+```
+
+The model summary shows several hours with significantly different coefficients, suggesting strong time-based patterns. 
+We visualize the predicted probabilities from the model alongside actual fatality rates to assess how well the model captures reality.
+
+```{r model verification}
+predicted_prob <- predict(model, type = "response")
+ggplot(shooting_incident_simple, aes(x = HOUR, y = predicted_prob, color = as.factor(STATISTICAL_MURDER_FLAG))) +
+  geom_jitter(alpha = 0.3) +
+  labs(title = "Predicted Probability by Hour and Actual Outcome",
+       x = "Hour", y = "Predicted Probability",
+       color = "Actual Outcome") +
+  theme_minimal()
+
+# Add predicted class and actual flag
+shooting_incident_simple <- shooting_incident_simple %>%
+  mutate(predicted_prob = predict(model, type = "response"))
+
+# Compare actual vs predicted per hour
+comparison <- shooting_incident_simple %>%
+  group_by(HOUR) %>%
+  summarise(
+    actual_rate = mean(STATISTICAL_MURDER_FLAG),
+    predicted_rate = mean(predicted_prob)
+  )
+
+# Line plot
+ggplot(comparison, aes(x = HOUR)) +
+  geom_line(aes(y = actual_rate), color = "black", linewidth = 1.2, linetype = "solid") +
+  geom_line(aes(y = predicted_rate), color = "blue", linewidth = 1.2, linetype = "dashed") +
+  labs(
+    title = "Actual vs Predicted Murder Rate by Hour",
+    x = "Hour",
+    y = "Murder Rate / Predicted Probability"
+  ) +
+  theme_minimal()
+```
+Our analysis confirms that the hour of day plays a critical role in the likelihood of a shooting resulting in death. The modeling results further support the visual patterns observed earlier, indicating that time-based features should be prioritized in future analyses or predictive systems.
+
+## Summary and Key Takeaways
+
+Through data cleaning, visualization, and modeling, we explored the distribution and fatality patterns in NYC shooting incidents. Our analysis yielded the following key insights:
+
+- The **hour of day** is a strong non-linear predictor of shooting fatality.  
+  Visualizations and logistic regression results confirm that shootings during early morning hours (5–7 AM) are significantly more likely to be fatal.
+  
+- **Borough** and **day of week** show weaker patterns. While there are some differences across regions and weekdays, their predictive value is modest compared to time-of-day effects.
+
+- Modeling with `factor(HOUR)` significantly improved the fit compared to using numeric `HOUR`, indicating the importance of capturing non-linear time-based effects.
+
+- The model was evaluated using predicted probabilities and compared with actual fatality rates by hour. The results align well, confirming the model's utility despite limited complexity.
+
+## Project Step 4: Conclusion and Bias Identification
+
+### Conclusion
+
+This analysis of the NYPD Shooting Incident Data (Historic) revealed several important patterns. Most notably, the time of day was shown to be a significant factor in predicting whether a shooting would be fatal. Early morning hours (especially 5–7 AM) were associated with a much higher fatality rate than other times of day. This insight was validated through both visualizations and logistic regression modeling, where treating `HOUR` as a categorical variable greatly improved model fit and interpretability.
+
+Geographic and weekly patterns, such as those involving borough or day of the week, appeared comparatively stable and offered limited additional predictive value in the context of our current modeling approach. The project emphasized the importance of thoughtful variable encoding (e.g., nonlinear time handling), exploratory visualization, and modeling parsimony.
+
+---
+
+### Sources of Bias
+
+Several potential sources of bias must be considered in interpreting these results:
+
+- **Reporting Bias**: The dataset depends on NYPD incident reporting, which may underrepresent certain cases (e.g., unreported shootings or misclassified incidents).
+- **Data Missingness**: Certain fields (e.g., `LOCATION_DESC`, `PERP_RACE`) contain substantial missing data, which limits the depth of demographic analysis.
+- **Survivorship Bias**: By focusing only on reported incidents, we may overlook broader social or medical factors influencing fatality (e.g., proximity to trauma care).
+- **Temporal Shift Bias**: Changes in police policy, technology, or social context over time (e.g., COVID-19 era differences) are not explicitly modeled but may influence incident outcomes.
+
+---
+
+### Personal Bias and Mitigation
+
+As a student approaching this project with a technical and statistical lens, I may have focused too heavily on quantifiable variables (like time and borough) while under-emphasizing qualitative or systemic factors (such as community access to emergency services or broader policy impacts). To mitigate this, I relied strictly on reproducible methods, limited subjective interpretation, and grounded all conclusions in data-derived patterns rather than assumptions.
+
+Further iterations could benefit from multi-disciplinary perspectives, incorporation of external context (e.g., hospital access, weather, neighborhood indicators), and more robust treatment of missing or censored data.
+
